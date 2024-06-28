@@ -19,7 +19,7 @@ psycopg2-binary
 pymysql
 bcrypt
 
-litellm==1.35.17
+litellm==1.40.29
 litellm[proxy]==1.35.17
 
 boto3
