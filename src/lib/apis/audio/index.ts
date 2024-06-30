@@ -30,6 +30,8 @@ export const getAudioConfig = async (token: string) => {
 type OpenAIConfigForm = {
 	url: string;
 	key: string;
+	model: string;
+	speaker: string;
 };
 
 export const updateAudioConfig = async (token: string, payload: OpenAIConfigForm) => {
@@ -95,7 +97,8 @@ export const transcribeAudio = async (token: string, file: File) => {
 export const synthesizeOpenAISpeech = async (
 	token: string = '',
 	speaker: string = 'alloy',
-	text: string = ''
+	text: string = '',
+	model?: string
 ) => {
 	let error = null;
 
@@ -106,9 +109,9 @@ export const synthesizeOpenAISpeech = async (
 			'Content-Type': 'application/json'
 		},
 		body: JSON.stringify({
-			model: 'tts-1',
 			input: text,
-			voice: speaker
+			voice: speaker,
+			...(model && { model })
 		})
 	})
 		.then(async (res) => {

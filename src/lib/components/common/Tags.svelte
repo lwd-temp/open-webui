@@ -1,6 +1,9 @@
 <script lang="ts">
 	import TagInput from './Tags/TagInput.svelte';
 	import TagList from './Tags/TagList.svelte';
+	import { getContext } from 'svelte';
+
+	const i18n = getContext('i18n');
 
 	export let tags = [];
 
@@ -8,7 +11,7 @@
 	export let addTag: Function;
 </script>
 
-<div class="flex flex-row flex-wrap gap-0.5 line-clamp-1">
+<div class="flex flex-row flex-wrap gap-1 line-clamp-1">
 	<TagList
 		{tags}
 		on:delete={(e) => {
@@ -17,7 +20,7 @@
 	/>
 
 	<TagInput
-		label={tags.length == 0 ? 'Add Tags' : ''}
+		label={tags.length == 0 ? $i18n.t('Add Tags') : ''}
 		on:add={(e) => {
 			addTag(e.detail);
 		}}

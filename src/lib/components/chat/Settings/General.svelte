@@ -4,7 +4,7 @@
 	import { getLanguages } from '$lib/i18n';
 	const dispatch = createEventDispatcher();
 
-	import { models, user, theme } from '$lib/stores';
+	import { models, settings, theme, user } from '$lib/stores';
 
 	const i18n = getContext('i18n');
 
@@ -32,7 +32,9 @@
 			saveSettings({ notificationEnabled: notificationEnabled });
 		} else {
 			toast.error(
-				'Response notifications cannot be activated as the website permissions have been denied. Please visit your browser settings to grant the necessary access.'
+				$i18n.t(
+					'Response notifications cannot be activated as the website permissions have been denied. Please visit your browser settings to grant the necessary access.'
+				)
 			);
 		}
 	};
@@ -41,21 +43,23 @@
 	let requestFormat = '';
 	let keepAlive = null;
 
-	let options = {
+	let params = {
 		// Advanced
-		seed: 0,
-		temperature: '',
-		repeat_penalty: '',
-		repeat_last_n: '',
-		mirostat: '',
-		mirostat_eta: '',
-		mirostat_tau: '',
-		top_k: '',
-		top_p: '',
-		stop: '',
-		tfs_z: '',
-		num_ctx: '',
-		num_predict: ''
+		seed: null,
+		temperature: null,
+		frequency_penalty: null,
+		repeat_last_n: null,
+		mirostat: null,
+		mirostat_eta: null,
+		mirostat_tau: null,
+		top_k: null,
+		top_p: null,
+		stop: null,
+		tfs_z: null,
+		num_ctx: null,
+		num_batch: null,
+		num_keep: null,
+		max_tokens: null
 	};
 
 	const toggleRequestFormat = async () => {
@@ -71,23 +75,16 @@
 	onMount(async () => {
 		selectedTheme = localStorage.theme ?? 'system';
 
-		let settings = JSON.parse(localStorage.getItem('settings') ?? '{}');
 		languages = await getLanguages();
 
-		notificationEnabled = settings.notificationEnabled ?? false;
-		system = settings.system ?? '';
+		notificationEnabled = $settings.notificationEnabled ?? false;
+		system = $settings.system ?? '';
 
-		requestFormat = settings.requestFormat ?? '';
-		keepAlive = settings.keepAlive ?? null;
+		requestFormat = $settings.requestFormat ?? '';
+		keepAlive = $settings.keepAlive ?? null;
 
-		options.seed = settings.seed ?? 0;
-		options.temperature = settings.temperature ?? '';
-		options.repeat_penalty = settings.repeat_penalty ?? '';
-		options.top_k = settings.top_k ?? '';
-		options.top_p = settings.top_p ?? '';
-		options.num_ctx = settings.num_ctx ?? '';
-		options = { ...options, ...settings.options };
-		options.stop = (settings?.options?.stop ?? []).join(',');
+		params = { ...params, ...$settings.params };
+		params.stop = $settings?.params?.stop ? ($settings?.params?.stop ?? []).join(',') : null;
 	});
 
 	const applyTheme = (_theme: string) => {
@@ -130,7 +127,7 @@
 </script>
 
 <div class="flex flex-col h-full justify-between text-sm">
-	<div class="  pr-1.5 overflow-y-scroll max-h-[22rem]">
+	<div class="  pr-1.5 overflow-y-scroll max-h-[25rem]">
 		<div class="">
 			<div class=" mb-1 text-sm font-medium">{$i18n.t('WebUI Settings')}</div>
 
@@ -147,6 +144,7 @@
 						<option value="dark">🌑 {$i18n.t('Dark')}</option>
 						<option value="oled-dark">🌃 {$i18n.t('OLED Dark')}</option>
 						<option value="light">☀️ {$i18n.t('Light')}</option>
+						<option value="her">🌷 Her</option>
 						<!-- <option value="rose-pine dark">🪻 {$i18n.t('Rosé Pine')}</option>
 						<option value="rose-pine-dawn light">🌷 {$i18n.t('Rosé Pine Dawn')}</option> -->
 					</select>
@@ -204,7 +202,7 @@
 			</div>
 		</div>
 
-		<hr class=" dark:border-gray-700 my-3" />
+		<hr class=" dark:border-gray-850 my-3" />
 
 		<div>
 			<div class=" my-2.5 text-sm font-medium">{$i18n.t('System Prompt')}</div>
@@ -228,8 +226,8 @@
 			</div>
 
 			{#if showAdvanced}
-				<AdvancedParams bind:options />
-				<hr class=" dark:border-gray-700" />
+				<AdvancedParams admin={$user?.role === 'admin'} bind:params />
+				<hr class=" dark:border-gray-850" />
 
 				<div class=" py-1 w-full justify-between">
 					<div class="flex w-full justify-between">
@@ -253,7 +251,7 @@
 					{#if keepAlive !== null}
 						<div class="flex mt-1 space-x-2">
 							<input
-								class="w-full rounded py-1.5 px-4 text-sm dark:text-gray-300 dark:bg-gray-800 outline-none border border-gray-100 dark:border-gray-600"
+								class="w-full rounded-lg py-2 px-4 text-sm dark:text-gray-300 dark:bg-gray-850 outline-none"
 								type="text"
 								placeholder={$i18n.t("e.g. '30s','10m'. Valid time units are 's', 'm', 'h'.")}
 								bind:value={keepAlive}
@@ -300,20 +298,26 @@
 			on:click={() => {
 				saveSettings({
 					system: system !== '' ? system : undefined,
-					options: {
-						seed: (options.seed !== 0 ? options.seed : undefined) ?? undefined,
-						stop: options.stop !== '' ? options.stop.split(',').filter((e) => e) : undefined,
-						temperature: options.temperature !== '' ? options.temperature : undefined,
-						repeat_penalty: options.repeat_penalty !== '' ? options.repeat_penalty : undefined,
-						repeat_last_n: options.repeat_last_n !== '' ? options.repeat_last_n : undefined,
-						mirostat: options.mirostat !== '' ? options.mirostat : undefined,
-						mirostat_eta: options.mirostat_eta !== '' ? options.mirostat_eta : undefined,
-						mirostat_tau: options.mirostat_tau !== '' ? options.mirostat_tau : undefined,
-						top_k: options.top_k !== '' ? options.top_k : undefined,
-						top_p: options.top_p !== '' ? options.top_p : undefined,
-						tfs_z: options.tfs_z !== '' ? options.tfs_z : undefined,
-						num_ctx: options.num_ctx !== '' ? options.num_ctx : undefined,
-						num_predict: options.num_predict !== '' ? options.num_predict : undefined
+					params: {
+						seed: (params.seed !== null ? params.seed : undefined) ?? undefined,
+						stop: params.stop ? params.stop.split(',').filter((e) => e) : undefined,
+						temperature: params.temperature !== null ? params.temperature : undefined,
+						frequency_penalty:
+							params.frequency_penalty !== null ? params.frequency_penalty : undefined,
+						repeat_last_n: params.repeat_last_n !== null ? params.repeat_last_n : undefined,
+						mirostat: params.mirostat !== null ? params.mirostat : undefined,
+						mirostat_eta: params.mirostat_eta !== null ? params.mirostat_eta : undefined,
+						mirostat_tau: params.mirostat_tau !== null ? params.mirostat_tau : undefined,
+						top_k: params.top_k !== null ? params.top_k : undefined,
+						top_p: params.top_p !== null ? params.top_p : undefined,
+						tfs_z: params.tfs_z !== null ? params.tfs_z : undefined,
+						num_ctx: params.num_ctx !== null ? params.num_ctx : undefined,
+						num_batch: params.num_batch !== null ? params.num_batch : undefined,
+						num_keep: params.num_keep !== null ? params.num_keep : undefined,
+						max_tokens: params.max_tokens !== null ? params.max_tokens : undefined,
+						use_mmap: params.use_mmap !== null ? params.use_mmap : undefined,
+						use_mlock: params.use_mlock !== null ? params.use_mlock : undefined,
+						num_thread: params.num_thread !== null ? params.num_thread : undefined
 					},
 					keepAlive: keepAlive ? (isNaN(keepAlive) ? keepAlive : parseInt(keepAlive)) : undefined
 				});

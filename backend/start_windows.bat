@@ -8,12 +8,13 @@ cd /d "%SCRIPT_DIR%" || exit /b
 
 SET "KEY_FILE=.webui_secret_key"
 IF "%PORT%"=="" SET PORT=8080
+IF "%HOST%"=="" SET HOST=0.0.0.0
 SET "WEBUI_SECRET_KEY=%WEBUI_SECRET_KEY%"
 SET "WEBUI_JWT_SECRET_KEY=%WEBUI_JWT_SECRET_KEY%"
 
 :: Check if WEBUI_SECRET_KEY and WEBUI_JWT_SECRET_KEY are not set
 IF "%WEBUI_SECRET_KEY%%WEBUI_JWT_SECRET_KEY%" == " " (
-    echo No WEBUI_SECRET_KEY provided
+    echo Loading WEBUI_SECRET_KEY from file, not provided as an environment variable.
 
     IF NOT EXIST "%KEY_FILE%" (
         echo Generating WEBUI_SECRET_KEY
@@ -29,4 +30,4 @@ IF "%WEBUI_SECRET_KEY%%WEBUI_JWT_SECRET_KEY%" == " " (
 
 :: Execute uvicorn
 SET "WEBUI_SECRET_KEY=%WEBUI_SECRET_KEY%"
-uvicorn main:app --host 0.0.0.0 --port "%PORT%" --forwarded-allow-ips '*'
+uvicorn main:app --host "%HOST%" --port "%PORT%" --forwarded-allow-ips '*'

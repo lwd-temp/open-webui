@@ -2,7 +2,7 @@ import os
 import logging
 import requests
 
-from typing import List
+from typing import List, Union
 
 from apps.ollama.main import (
     generate_ollama_embeddings,
@@ -19,8 +19,9 @@ from langchain.retrievers import (
 )
 
 from typing import Optional
-from config import SRC_LOG_LEVELS, CHROMA_CLIENT
 
+from utils.misc import get_last_user_message, add_or_update_system_message
+from config import SRC_LOG_LEVELS, CHROMA_CLIENT
 
 log = logging.getLogger(__name__)
 log.setLevel(SRC_LOG_LEVELS["RAG"])
@@ -35,6 +36,7 @@ def query_doc(
     try:
         collection = CHROMA_CLIENT.get_collection(name=collection_name)
         query_embeddings = embedding_function(query)
+
         result = collection.query(
             query_embeddings=[query_embeddings],
             n_results=k,
@@ -52,7 +54,7 @@ def query_doc_with_hybrid_search(
     embedding_function,
     k: int,
     reranking_function,
-    r: int,
+    r: float,
 ):
     try:
         collection = CHROMA_CLIENT.get_collection(name=collection_name)
@@ -76,9 +78,9 @@ def query_doc_with_hybrid_search(
 
         compressor = RerankCompressor(
             embedding_function=embedding_function,
+            top_n=k,
             reranking_function=reranking_function,
             r_score=r,
-            top_n=k,
         )
 
         compression_retriever = ContextualCompressionRetriever(
@@ -91,6 +93,7 @@ def query_doc_with_hybrid_search(
             "documents": [[d.page_content for d in result]],
             "metadatas": [[d.metadata for d in result]],
         }
+
         log.info(f"query_doc_with_hybrid_search:result {result}")
         return result
     except Exception as e:
@@ -167,7 +170,6 @@ def query_collection_with_hybrid_search(
     reranking_function,
     r: float,
 ):
-
     results = []
     for collection_name in collection_names:
         try:
@@ -182,7 +184,6 @@ def query_collection_with_hybrid_search(
             results.append(result)
         except:
             pass
-
     return merge_and_sort_query_results(results, k=k, reverse=True)
 
 
@@ -198,6 +199,7 @@ def get_embedding_function(
     embedding_function,
     openai_key,
     openai_url,
+    batch_size,
 ):
     if embedding_engine == "":
         return lambda query: embedding_function.encode(query).tolist()
@@ -221,78 +223,55 @@ def get_embedding_function(
 
         def generate_multiple(query, f):
             if isinstance(query, list):
-                return [f(q) for q in query]
+                if embedding_engine == "openai":
+                    embeddings = []
+                    for i in range(0, len(query), batch_size):
+                        embeddings.extend(f(query[i : i + batch_size]))
+                    return embeddings
+                else:
+                    return [f(q) for q in query]
             else:
                 return f(query)
 
         return lambda query: generate_multiple(query, func)
 
 
-def rag_messages(
-    docs,
+def get_rag_context(
+    files,
     messages,
-    template,
     embedding_function,
     k,
     reranking_function,
     r,
     hybrid_search,
 ):
-    log.debug(f"docs: {docs} {messages} {embedding_function} {reranking_function}")
-
-    last_user_message_idx = None
-    for i in range(len(messages) - 1, -1, -1):
-        if messages[i]["role"] == "user":
-            last_user_message_idx = i
-            break
-
-    user_message = messages[last_user_message_idx]
-
-    if isinstance(user_message["content"], list):
-        # Handle list content input
-        content_type = "list"
-        query = ""
-        for content_item in user_message["content"]:
-            if content_item["type"] == "text":
-                query = content_item["text"]
-                break
-    elif isinstance(user_message["content"], str):
-        # Handle text content input
-        content_type = "text"
-        query = user_message["content"]
-    else:
-        # Fallback in case the input does not match expected types
-        content_type = None
-        query = ""
+    log.debug(f"files: {files} {messages} {embedding_function} {reranking_function}")
+    query = get_last_user_message(messages)
 
     extracted_collections = []
     relevant_contexts = []
 
-    for doc in docs:
+    for file in files:
         context = None
 
-        collection = doc.get("collection_name")
-        if collection:
-            collection = [collection]
-        else:
-            collection = doc.get("collection_names", [])
+        collection_names = (
+            file["collection_names"]
+            if file["type"] == "collection"
+            else [file["collection_name"]]
+        )
 
-        collection = set(collection).difference(extracted_collections)
-        if not collection:
-            log.debug(f"skipping {doc} as it has already been extracted")
+        collection_names = set(collection_names).difference(extracted_collections)
+        if not collection_names:
+            log.debug(f"skipping {file} as it has already been extracted")
             continue
 
         try:
-            if doc["type"] == "text":
-                context = doc["content"]
+            if file["type"] == "text":
+                context = file["content"]
             else:
                 if hybrid_search:
                     context = query_collection_with_hybrid_search(
-                        collection_names=(
-                            doc["collection_names"]
-                            if doc["type"] == "collection"
-                            else [doc["collection_name"]]
-                        ),
+                        collection_names=collection_names,
                         query=query,
                         embedding_function=embedding_function,
                         k=k,
@@ -301,11 +280,7 @@ def rag_messages(
                     )
                 else:
                     context = query_collection(
-                        collection_names=(
-                            doc["collection_names"]
-                            if doc["type"] == "collection"
-                            else [doc["collection_name"]]
-                        ),
+                        collection_names=collection_names,
                         query=query,
                         embedding_function=embedding_function,
                         k=k,
@@ -315,43 +290,34 @@ def rag_messages(
             context = None
 
         if context:
-            relevant_contexts.append(context)
+            relevant_contexts.append({**context, "source": file})
 
-        extracted_collections.extend(collection)
+        extracted_collections.extend(collection_names)
 
     context_string = ""
+
+    citations = []
     for context in relevant_contexts:
-        items = context["documents"][0]
-        context_string += "\n\n".join(items)
+        try:
+            if "documents" in context:
+                context_string += "\n\n".join(
+                    [text for text in context["documents"][0] if text is not None]
+                )
+
+                if "metadatas" in context:
+                    citations.append(
+                        {
+                            "source": context["source"],
+                            "document": context["documents"][0],
+                            "metadata": context["metadatas"][0],
+                        }
+                    )
+        except Exception as e:
+            log.exception(e)
+
     context_string = context_string.strip()
 
-    ra_content = rag_template(
-        template=template,
-        context=context_string,
-        query=query,
-    )
-
-    log.debug(f"ra_content: {ra_content}")
-
-    if content_type == "list":
-        new_content = []
-        for content_item in user_message["content"]:
-            if content_item["type"] == "text":
-                # Update the text item's content with ra_content
-                new_content.append({"type": "text", "text": ra_content})
-            else:
-                # Keep other types of content as they are
-                new_content.append(content_item)
-        new_user_message = {**user_message, "content": new_content}
-    else:
-        new_user_message = {
-            **user_message,
-            "content": ra_content,
-        }
-
-    messages[last_user_message_idx] = new_user_message
-
-    return messages
+    return context_string, citations
 
 
 def get_model_path(model: str, update_model: bool = False):
@@ -393,8 +359,22 @@ def get_model_path(model: str, update_model: bool = False):
 
 
 def generate_openai_embeddings(
-    model: str, text: str, key: str, url: str = "https://api.openai.com/v1"
+    model: str,
+    text: Union[str, list[str]],
+    key: str,
+    url: str = "https://api.openai.com/v1",
 ):
+    if isinstance(text, list):
+        embeddings = generate_openai_batch_embeddings(model, text, key, url)
+    else:
+        embeddings = generate_openai_batch_embeddings(model, [text], key, url)
+
+    return embeddings[0] if isinstance(text, str) else embeddings
+
+
+def generate_openai_batch_embeddings(
+    model: str, texts: list[str], key: str, url: str = "https://api.openai.com/v1"
+) -> Optional[list[list[float]]]:
     try:
         r = requests.post(
             f"{url}/embeddings",
@@ -402,12 +382,12 @@ def generate_openai_embeddings(
                 "Content-Type": "application/json",
                 "Authorization": f"Bearer {key}",
             },
-            json={"input": text, "model": model},
+            json={"input": texts, "model": model},
         )
         r.raise_for_status()
         data = r.json()
         if "data" in data:
-            return data["data"][0]["embedding"]
+            return [elem["embedding"] for elem in data["data"]]
         else:
             raise "Something went wrong :/"
     except Exception as e:
@@ -443,13 +423,15 @@ class ChromaRetriever(BaseRetriever):
         metadatas = results["metadatas"][0]
         documents = results["documents"][0]
 
-        return [
-            Document(
-                metadata=metadatas[idx],
-                page_content=documents[idx],
+        results = []
+        for idx in range(len(ids)):
+            results.append(
+                Document(
+                    metadata=metadatas[idx],
+                    page_content=documents[idx],
+                )
             )
-            for idx in range(len(ids))
-        ]
+        return results
 
 
 import operator
@@ -465,9 +447,9 @@ from sentence_transformers import util
 
 class RerankCompressor(BaseDocumentCompressor):
     embedding_function: Any
+    top_n: int
     reranking_function: Any
     r_score: float
-    top_n: int
 
     class Config:
         extra = Extra.forbid
@@ -479,7 +461,9 @@ class RerankCompressor(BaseDocumentCompressor):
         query: str,
         callbacks: Optional[Callbacks] = None,
     ) -> Sequence[Document]:
-        if self.reranking_function:
+        reranking = self.reranking_function is not None
+
+        if reranking:
             scores = self.reranking_function.predict(
                 [(query, doc.page_content) for doc in documents]
             )
@@ -496,9 +480,7 @@ class RerankCompressor(BaseDocumentCompressor):
                 (d, s) for d, s in docs_with_scores if s >= self.r_score
             ]
 
-        reverse = self.reranking_function is not None
-        result = sorted(docs_with_scores, key=operator.itemgetter(1), reverse=reverse)
-
+        result = sorted(docs_with_scores, key=operator.itemgetter(1), reverse=True)
         final_results = []
         for doc, doc_score in result[: self.top_n]:
             metadata = doc.metadata
